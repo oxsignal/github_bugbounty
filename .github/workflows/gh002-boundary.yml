@@ -1,0 +1,65 @@
+name: GH002 boundary probe
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/gh002-boundary.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  repo-token-and-secret-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check repo secret and environment secret outside environment
+        env:
+          GH002_DUMMY_SECRET: ${{ secrets.GH002_DUMMY_SECRET }}
+          GH002_ENV_SECRET_NO_ENV: ${{ secrets.GH002_ENV_SECRET }}
+        run: |
+          if [ -n "$GH002_DUMMY_SECRET" ]; then echo "repo_secret_present=true"; else echo "repo_secret_present=false"; fi
+          if [ -n "$GH002_ENV_SECRET_NO_ENV" ]; then echo "env_secret_without_environment=true"; else echo "env_secret_without_environment=false"; fi
+
+      - name: Check same-owner private repo with this repo GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          code=$(curl -sS -o /tmp/gh002-private-repo.json -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/oxsignal/github_bugbounty_pri)
+          echo "private_repo_api_status=${code}"
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '{message, full_name, visibility, private} | tojson' /tmp/gh002-private-repo.json || true
+          else
+            head -c 300 /tmp/gh002-private-repo.json || true
+            echo
+          fi
+          test "$code" != "200"
+
+      - name: Create harmless artifact payload
+        run: |
+          mkdir -p gh002-artifact
+          printf 'gh002 harmless artifact from run %s\n' "$GITHUB_RUN_ID" > gh002-artifact/result.txt
+
+      - name: Upload harmless artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh002-harmless-artifact
+          path: gh002-artifact/result.txt
+          retention-days: 1
+
+  environment-secret-boundary:
+    runs-on: ubuntu-latest
+    environment: gh002-test
+    steps:
+      - name: Check environment secret only in matching environment job
+        env:
+          GH002_ENV_SECRET: ${{ secrets.GH002_ENV_SECRET }}
+        run: |
+          if [ -n "$GH002_ENV_SECRET" ]; then echo "env_secret_present_in_environment=true"; else echo "env_secret_present_in_environment=false"; fi
