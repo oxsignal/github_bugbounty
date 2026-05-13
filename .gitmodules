@@ -1,0 +1,3 @@
+[submodule "gh006-capture"]
+	path = gh006-capture
+	url = http://127.0.0.1:46661/gh006-submodule.git
