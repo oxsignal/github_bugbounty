@@ -1,0 +1,77 @@
+name: GH002 PR boundary probe
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+jobs:
+  pr-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Record event context without checking out PR code
+        run: |
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "actor=${GITHUB_ACTOR}"
+          echo "base_ref=${{ github.event.pull_request.base.ref }}"
+          echo "head_repo=${{ github.event.pull_request.head.repo.full_name }}"
+          echo "head_ref=${{ github.event.pull_request.head.ref }}"
+          echo "is_fork=${{ github.event.pull_request.head.repo.fork }}"
+
+      - name: Check secret availability without printing values
+        env:
+          GH002_DUMMY_SECRET: ${{ secrets.GH002_DUMMY_SECRET }}
+          GH002_ENV_SECRET_NO_ENV: ${{ secrets.GH002_ENV_SECRET }}
+        run: |
+          if [ -n "$GH002_DUMMY_SECRET" ]; then echo "repo_secret_present=true"; else echo "repo_secret_present=false"; fi
+          if [ -n "$GH002_ENV_SECRET_NO_ENV" ]; then echo "env_secret_without_environment=true"; else echo "env_secret_without_environment=false"; fi
+
+      - name: Check private repo with event GITHUB_TOKEN
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          code=$(curl -sS -o /tmp/gh002-private-repo.json -w "%{http_code}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            https://api.github.com/repos/oxsignal/github_bugbounty_pri)
+          echo "private_repo_api_status=${code}"
+          if command -v jq >/dev/null 2>&1; then
+            jq -r '{message, full_name, visibility, private} | tojson' /tmp/gh002-private-repo.json || true
+          else
+            head -c 300 /tmp/gh002-private-repo.json || true
+            echo
+          fi
+          test "$code" != "200"
+
+      - name: Upload harmless PR artifact
+        run: |
+          mkdir -p gh002-pr-artifact
+          printf 'gh002 event=%s actor=%s pr=%s\n' "$GITHUB_EVENT_NAME" "$GITHUB_ACTOR" "${{ github.event.pull_request.number }}" > gh002-pr-artifact/result.txt
+
+      - name: Upload harmless PR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gh002-pr-${{ github.event_name }}-${{ github.event.pull_request.number }}
+          path: gh002-pr-artifact/result.txt
+          retention-days: 1
+
+  pr-environment-boundary:
+    runs-on: ubuntu-latest
+    environment: gh002-test
+    steps:
+      - name: Check environment secret in PR event job without printing value
+        env:
+          GH002_ENV_SECRET: ${{ secrets.GH002_ENV_SECRET }}
+        run: |
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          echo "actor=${GITHUB_ACTOR}"
+          if [ -n "$GH002_ENV_SECRET" ]; then echo "env_secret_present_in_environment=true"; else echo "env_secret_present_in_environment=false"; fi
